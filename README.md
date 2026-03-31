@@ -8,9 +8,15 @@ created for [Packer](https://www.packer.io), it is additionally in use by
 [Boundary](https://www.boundaryproject.io),
 and [Waypoint](https://www.waypointproject.io).
 
-While the plugin system is over RPC, it is currently only designed to work
-over a local [reliable] network. Plugins over a real network are not supported
-and will lead to unexpected behavior.
+## Remote Plugin Support
+
+**New!** The plugin system now supports reliable gRPC communication over the
+network. Plugins can run on different machines and communicate over TCP/IP
+with built-in keepalive for reliable connections.
+
+For local plugins (subprocess-based), see the traditional usage below.
+For remote plugins (network-based), see the [Remote Plugin Support](#remote-plugin-support-1)
+section.
 
 This plugin system has been used on millions of machines across many different
 projects and has proven to be battle hardened and ready for production use.
@@ -74,6 +80,70 @@ reattach.
 **Cryptographically Secure Plugins.** Plugins can be verified with an expected
 checksum and RPC communications can be configured to use TLS. The host process
 must be properly secured to protect this configuration.
+
+## Remote Plugin Support
+
+The plugin system now supports reliable gRPC communication over the network.
+Unlike the traditional local subprocess-based approach, remote plugins can
+run on different machines and communicate over TCP/IP.
+
+### Key Features
+
+- **Network Transport**: Plugins communicate over TCP/IP instead of local sockets
+- **Keepalive**: Automatic keepalive pings maintain reliable connections over
+  potentially unreliable networks
+- **Health Checks**: Clients can verify server availability before connecting
+- **TLS Support**: Can use TLS for secure connections over untrusted networks
+- **Graceful Shutdown**: Server handles signals for clean shutdown
+
+### Server Usage
+
+```go
+import (
+    "net"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/health"
+    "github.com/hashicorp/go-plugin"
+)
+
+// Create a TCP listener
+lis, _ := net.Listen("tcp", ":50051")
+
+// Create server with keepalive enforcement
+grpcServer := grpc.NewServer(
+    grpc.KeepaliveEnforcementPolicy(
+        plugin.DefaultGRPCServerKeepaliveEnforcementPolicy(),
+    ),
+)
+
+// Register health check
+healthCheck := health.NewServer()
+healthCheck.SetServingStatus(plugin.GRPCServiceName, grpc_health_v1.HealthCheckResponse_SERVING)
+grpc_health_v1.RegisterHealthServer(grpcServer, healthCheck)
+
+// Register plugins and serve
+grpcServer.Serve(lis)
+```
+
+### Client Usage
+
+```go
+import "github.com/hashicorp/go-plugin"
+
+// Connect to remote server with keepalive
+client, err := plugin.NewGRPCRemoteClient(&plugin.GRPCRemoteClientConfig{
+    Addr:    "localhost:50051",
+    Plugins: pluginMap,
+})
+defer client.Close()
+
+// Dispense and use the plugin
+raw, _ := client.Dispense("kv")
+kv := raw.(MyPlugin)
+kv.Put("key", []byte("value"))
+```
+
+See the `examples/remote` directory for a complete working example.
 
 ## Architecture
 
